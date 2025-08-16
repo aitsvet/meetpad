@@ -22,7 +22,7 @@ CORS(app)
 # Initialize faster-whisper model
 logger.info("Loading faster-whisper model...")
 model = WhisperModel(
-    "deepdml/faster-whisper-large-v3-turbo-ct2",
+    "MikhailMihalis/whisper-large-v3-russian-ties-podlodka-v1.2-ct-int8",
     device="cpu",
     compute_type="int8"
 )
@@ -35,8 +35,8 @@ def transcribe_audio(audio_path: str) -> str:
         logger.info(f"Transcribing audio from: {audio_path}")
         
         # Transcribe with faster-whisper
-        segments, info = batched_model.transcribe(audio_path, batch_size=16, without_timestamps=True, multilingual=True, language="ru")
-        
+        segments, info = batched_model.transcribe(audio_path, multilingual=True, language="ru", # batch_size=16,
+                                                  vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
         logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
         # Collect all segments
@@ -49,8 +49,8 @@ def transcribe_audio(audio_path: str) -> str:
         return transcription
         
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        return "Error transcribing audio"
+        # logger.error(f"Transcription error: {e}")
+        return ""
 
 @app.route('/')
 def index():

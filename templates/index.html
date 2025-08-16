@@ -110,7 +110,7 @@
             <div class="status" id="status">Ready to record</div>
             <div class="timer" id="timer"></div>
             <button class="record-btn" id="recordBtn">🎤</button>
-            <p>Click to start/stop recording. Audio is transcribed in 30-second chunks automatically.</p>
+            <p>Click to start/stop recording. Audio is transcribed in 10-second chunks automatically.</p>
             <div class="transcriptions" id="transcriptions"></div>
             <div class="logs" id="logs"></div>
         </div>
@@ -161,12 +161,12 @@
                 // Start timer
                 timerInterval = setInterval(updateTimer, 100);
                 
-                // Send chunks every 30 seconds
+                // Send chunks every 10 seconds
                 chunkInterval = setInterval(() => {
                     if (isRecording && audioChunks.length > 0) {
                         sendCurrentChunk();
                     }
-                }, 30000);
+                }, 10000);
                 
             } catch (error) {
                 console.error('Error starting recording:', error);

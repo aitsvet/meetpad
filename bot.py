@@ -51,7 +51,6 @@ def main() -> None:
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     logger.info("Handlers registered")
     
     # Start the bot
