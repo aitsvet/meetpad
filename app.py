@@ -4,7 +4,7 @@ import os
 import base64
 import tempfile
 import logging
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from faster_whisper import WhisperModel
 
 # Configure logging to stderr
 import sys
@@ -18,55 +18,41 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Whisper model
-logger.info("Loading Whisper processor...")
-processor = WhisperProcessor.from_pretrained("MikhailMihalis/whisper-large-v3-russian-ties-podlodka-v1.2-ct-int8")
-logger.info("Processor loaded successfully")
-
-logger.info("Loading Whisper model...")
-model = WhisperForConditionalGeneration.from_pretrained("MikhailMihalis/whisper-large-v3-russian-ties-podlodka-v1.2-ct-int8")
-logger.info("Model loaded successfully")
-
-# Ensure CPU usage
-logger.info("Moving model to CPU...")
-model = model.to('cpu')
-model.eval()
-logger.info("Model ready for inference on CPU")
+# Initialize faster-whisper model
+logger.info("Loading faster-whisper model...")
+model = WhisperModel(
+    "MikhailMihalis/whisper-large-v3-russian-ties-podlodka-v1.2-ct-int8",
+    device="cpu",
+    compute_type="int8"
+)
+logger.info("Model loaded successfully and ready for inference on CPU")
 
 def transcribe_audio(audio_path: str) -> str:
-    """Transcribe audio using Whisper model."""
+    """Transcribe audio using faster-whisper model."""
     try:
-        logger.info(f"Loading audio from: {audio_path}")
-        import soundfile as sf
+        logger.info(f"Transcribing audio from: {audio_path}")
         
-        # Load audio
-        audio, sample_rate = sf.read(audio_path)
-        logger.info(f"Audio loaded: shape={audio.shape}, sample_rate={sample_rate}")
+        # Transcribe with faster-whisper
+        segments, info = model.transcribe(
+            audio_path,
+            beam_size=5,
+            language="ru",
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
         
-        # Convert to mono if stereo
-        if len(audio.shape) > 1:
-            logger.info("Converting stereo to mono")
-            audio = audio.mean(axis=1)
+        logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
-        # Resample to 16kHz if needed
-        if sample_rate != 16000:
-            logger.info(f"Resampling from {sample_rate}Hz to 16000Hz")
-            # Simple resampling - just take every nth sample
-            ratio = 16000 / sample_rate
-            audio = audio[::int(1/ratio)]
-            logger.info(f"Resampled audio shape: {audio.shape}")
+        # Collect all segments
+        transcription_parts = []
+        for segment in segments:
+            transcription_parts.append(segment.text)
+            logger.info(f"Segment: {segment.start:.1f}s - {segment.end:.1f}s: '{segment.text}'")
         
-        # Process with Whisper
-        logger.info("Processing audio with Whisper processor...")
-        inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
-        logger.info("Audio processed, generating transcription...")
+        transcription = " ".join(transcription_parts).strip()
+        logger.info(f"Final transcription: '{transcription}'")
         
-        # Generate transcription
-        predicted_ids = model.generate(inputs["input_features"])
-        transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-        logger.info(f"Raw transcription: '{transcription}'")
-        
-        return transcription.strip()
+        return transcription
         
     except Exception as e:
         logger.error(f"Transcription error: {e}")
