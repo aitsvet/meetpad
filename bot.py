@@ -9,8 +9,13 @@ from transformers import WhisperProcessor, WhisperForConditionalGeneration
 import soundfile as sf
 import json
 
-# Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Configure logging to stderr
+import sys
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=logging.INFO,
+    stream=sys.stderr
+)
 logger = logging.getLogger(__name__)
 
 # Initialize Whisper model
