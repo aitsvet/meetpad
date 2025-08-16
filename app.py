@@ -22,7 +22,7 @@ CORS(app)
 # Initialize faster-whisper model
 logger.info("Loading faster-whisper model...")
 model = WhisperModel(
-    "openai/whisper-large-v3-turbo",
+    "deepdml/faster-whisper-large-v3-turbo-ct2",
     device="cpu",
     compute_type="int8"
 )
@@ -34,7 +34,7 @@ def transcribe_audio(audio_path: str) -> str:
         logger.info(f"Transcribing audio from: {audio_path}")
         
         # Transcribe with faster-whisper
-        segments, info = model.transcribe(audio_path, batch_size=16, without_timestamps=True)
+        segments, info = model.transcribe(audio_path, batch_size=16, without_timestamps=True, multilingual=True, language="ru")
         
         logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
