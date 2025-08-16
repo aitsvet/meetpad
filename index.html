@@ -74,6 +74,7 @@
         }
         .transcription-text {
             font-size: 14px;
+            color: #0066cc;
         }
         .logs {
             margin-top: 20px;
@@ -102,24 +103,46 @@
         .log-success {
             color: #00cc00;
         }
+        .telegram-status {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .telegram-connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .telegram-disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
     </style>
 </head>
 <body>
-            <div class="container">
-            <h1>Audio Transcription</h1>
-            <div class="status" id="status">Ready to record</div>
-            <div class="timer" id="timer"></div>
-            <button class="record-btn" id="recordBtn">🎤</button>
-            <p>Click to start/stop recording. Audio is transcribed in 10-second chunks automatically.</p>
-            <div class="transcriptions" id="transcriptions"></div>
-            <div class="logs" id="logs"></div>
+    <div class="container">
+        <h1>🎤 Audio Transcription</h1>
+        
+        <div class="telegram-status" id="telegramStatus">
+            <span id="telegramStatusText">Connecting to Telegram...</span>
         </div>
+        
+        <div class="status" id="status">Ready to record</div>
+        <div class="timer" id="timer"></div>
+        <button class="record-btn" id="recordBtn">🎤</button>
+        <p>Click to start/stop recording. Audio is transcribed in 10-second chunks automatically and sent to your Telegram chat.</p>
+        
+        <div class="transcriptions" id="transcriptions"></div>
+        <div class="logs" id="logs"></div>
+    </div>
 
     <script>
         let tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
-
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
@@ -133,6 +156,29 @@
         const timer = document.getElementById('timer');
         const transcriptions = document.getElementById('transcriptions');
         const logs = document.getElementById('logs');
+                
+        // Update Telegram status
+        function updateTelegramStatus(connected) {
+            const statusElement = document.getElementById('telegramStatus');
+            const statusText = document.getElementById('telegramStatusText');
+            
+            if (connected) {
+                statusElement.className = 'telegram-status telegram-connected';
+                statusText.textContent = '✅ Connected to Telegram';
+            } else {
+                statusElement.className = 'telegram-status telegram-disconnected';
+                statusText.textContent = '❌ Not connected to Telegram';
+            }
+        }
+        
+        // Check Telegram connection
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            updateTelegramStatus(true);
+            addLog('success', 'Telegram WebApp initialized successfully');
+        } else {
+            updateTelegramStatus(false);
+            addLog('error', 'Telegram WebApp not properly initialized');
+        }
 
         recordBtn.addEventListener('click', toggleRecording);
 
@@ -242,6 +288,18 @@
                 addLog('info', `Data size: ${base64Size} chars (base64), ${chunkSize} bytes (original)`);
                 
                 try {
+                    // Get user info from Telegram
+                    const user = tg.initDataUnsafe?.user;
+                    const chatId = user?.id;
+                    const userId = user?.id || 'unknown';
+                    
+                    if (!chatId) {
+                        addLog('error', 'Cannot get chat ID from Telegram');
+                        return;
+                    }
+                    
+                    addLog('info', `User ID: ${userId}, Chat ID: ${chatId}`);
+                    
                     // Send to Flask backend
                     const response = await fetch('/transcribe', {
                         method: 'POST',
@@ -250,7 +308,8 @@
                         },
                         body: JSON.stringify({
                             audio_data: audioData,
-                            user_id: tg.initDataUnsafe?.user?.id || 'unknown'
+                            user_id: userId,
+                            chat_id: chatId
                         })
                     });
                     
@@ -263,6 +322,12 @@
                         if (result.transcription) {
                             addTranscription(result.transcription);
                             addLog('info', `Transcription: "${result.transcription}"`);
+                            
+                            if (result.sent_to_telegram) {
+                                addLog('success', 'Transcription sent to your Telegram chat');
+                            } else {
+                                addLog('warning', 'Transcription not sent to Telegram (bot token not configured)');
+                            }
                         }
                     } else {
                         const errorText = await response.text();
