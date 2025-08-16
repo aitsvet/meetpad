@@ -4,7 +4,7 @@ import os
 import base64
 import tempfile
 import logging
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 
 # Configure logging to stderr
 import sys
@@ -26,6 +26,7 @@ model = WhisperModel(
     device="cpu",
     compute_type="int8"
 )
+batched_model = BatchedInferencePipeline(model=model)
 logger.info("Model loaded successfully and ready for inference on CPU")
 
 def transcribe_audio(audio_path: str) -> str:
@@ -34,7 +35,7 @@ def transcribe_audio(audio_path: str) -> str:
         logger.info(f"Transcribing audio from: {audio_path}")
         
         # Transcribe with faster-whisper
-        segments, info = model.transcribe(audio_path, batch_size=16, without_timestamps=True, multilingual=True, language="ru")
+        segments, info = batched_model.transcribe(audio_path, batch_size=16, without_timestamps=True, multilingual=True, language="ru")
         
         logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
