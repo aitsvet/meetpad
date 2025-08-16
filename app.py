@@ -33,13 +33,7 @@ def transcribe_audio(audio_path: str) -> str:
         logger.info(f"Transcribing audio from: {audio_path}")
         
         # Transcribe with faster-whisper
-        segments, info = model.transcribe(
-            audio_path,
-            beam_size=5,
-            language="ru",
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
+        segments, info = model.transcribe(audio_path)
         
         logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
