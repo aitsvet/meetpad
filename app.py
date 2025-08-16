@@ -13,6 +13,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stderr
 )
+logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -21,7 +22,7 @@ CORS(app)
 # Initialize faster-whisper model
 logger.info("Loading faster-whisper model...")
 model = WhisperModel(
-    "MikhailMihalis/whisper-large-v3-russian-ties-podlodka-v1.2-ct-int8",
+    "openai/whisper-large-v3-turbo",
     device="cpu",
     compute_type="int8"
 )
@@ -33,7 +34,7 @@ def transcribe_audio(audio_path: str) -> str:
         logger.info(f"Transcribing audio from: {audio_path}")
         
         # Transcribe with faster-whisper
-        segments, info = model.transcribe(audio_path)
+        segments, info = model.transcribe(audio_path, batch_size=16, without_timestamps=True)
         
         logger.info(f"Transcription info: language={info.language}, language_probability={info.language_probability:.2f}")
         
@@ -41,11 +42,9 @@ def transcribe_audio(audio_path: str) -> str:
         transcription_parts = []
         for segment in segments:
             transcription_parts.append(segment.text)
-            logger.info(f"Segment: {segment.start:.1f}s - {segment.end:.1f}s: '{segment.text}'")
+            logger.info(f"Segment: '{segment.text}'")
         
-        transcription = " ".join(transcription_parts).strip()
-        logger.info(f"Final transcription: '{transcription}'")
-        
+        transcription = " ".join(transcription_parts).strip()        
         return transcription
         
     except Exception as e:
