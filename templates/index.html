@@ -60,7 +60,7 @@
         <div class="status" id="status">Ready to record</div>
         <div class="timer" id="timer"></div>
         <button class="record-btn" id="recordBtn">🎤</button>
-        <p>Press and hold to record audio in 30-second chunks</p>
+        <p>Click to start/stop recording. Audio is transcribed in 30-second chunks automatically.</p>
     </div>
 
     <script>
@@ -73,22 +73,18 @@
         let isRecording = false;
         let recordingStartTime;
         let timerInterval;
+        let chunkInterval;
+        let stream;
 
         const recordBtn = document.getElementById('recordBtn');
         const status = document.getElementById('status');
         const timer = document.getElementById('timer');
 
-        recordBtn.addEventListener('mousedown', startRecording);
-        recordBtn.addEventListener('mouseup', stopRecording);
-        recordBtn.addEventListener('mouseleave', stopRecording);
-        recordBtn.addEventListener('touchstart', startRecording);
-        recordBtn.addEventListener('touchend', stopRecording);
+        recordBtn.addEventListener('click', toggleRecording);
 
         async function startRecording() {
-            if (isRecording) return;
-            
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 audioChunks = [];
                 
@@ -96,25 +92,20 @@
                     audioChunks.push(event.data);
                 };
                 
-                mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    await sendAudioToBot(audioBlob);
-                    stream.getTracks().forEach(track => track.stop());
-                };
-                
-                mediaRecorder.start();
+                mediaRecorder.start(1000); // Collect data every second
                 isRecording = true;
                 recordingStartTime = Date.now();
                 recordBtn.classList.add('recording');
-                status.textContent = 'Recording...';
+                recordBtn.textContent = '⏹️';
+                status.textContent = 'Recording... Click to stop';
                 
                 // Start timer
                 timerInterval = setInterval(updateTimer, 100);
                 
-                // Auto-stop after 30 seconds
-                setTimeout(() => {
-                    if (isRecording) {
-                        stopRecording();
+                // Send chunks every 30 seconds
+                chunkInterval = setInterval(() => {
+                    if (isRecording && audioChunks.length > 0) {
+                        sendCurrentChunk();
                     }
                 }, 30000);
                 
@@ -129,50 +120,64 @@
             
             isRecording = false;
             recordBtn.classList.remove('recording');
-            status.textContent = 'Processing...';
+            recordBtn.textContent = '🎤';
+            status.textContent = 'Stopping...';
             clearInterval(timerInterval);
+            clearInterval(chunkInterval);
             timer.textContent = '';
             
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
             }
+            
+            // Send final chunk if there's any data
+            if (audioChunks.length > 0) {
+                sendCurrentChunk();
+            }
+            
+            // Stop stream
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            status.textContent = 'Ready to record';
         }
 
         function updateTimer() {
             if (!isRecording) return;
             
             const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-            const remaining = Math.max(0, 30 - elapsed);
-            timer.textContent = `${remaining}s`;
-            
-            if (remaining === 0) {
-                stopRecording();
-            }
+            timer.textContent = `${elapsed}s`;
         }
 
-        async function sendAudioToBot(audioBlob) {
-            try {
-                // Convert to base64
-                const reader = new FileReader();
-                reader.onload = async () => {
-                    const audioData = reader.result;
-                    
-                    // Send to Telegram bot via web app data
-                    tg.sendData(JSON.stringify({
-                        audio_data: audioData
-                    }));
-                    
-                    status.textContent = 'Audio sent! Check bot for transcription.';
-                    setTimeout(() => {
-                        status.textContent = 'Ready to record';
-                    }, 3000);
-                };
-                reader.readAsDataURL(audioBlob);
-                
-            } catch (error) {
-                console.error('Error sending audio:', error);
-                status.textContent = 'Error sending audio';
+        function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
             }
+        }
+        
+        function sendCurrentChunk() {
+            if (audioChunks.length === 0) return;
+            
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            audioChunks = []; // Clear chunks after sending
+            
+            // Convert to base64
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const audioData = reader.result;
+                
+                // Send to Telegram bot via web app data
+                tg.sendData(JSON.stringify({
+                    audio_data: audioData
+                }));
+                
+                console.log('Audio chunk sent for transcription');
+            };
+            reader.readAsDataURL(audioBlob);
         }
     </script>
 </body>
