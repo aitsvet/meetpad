@@ -125,43 +125,38 @@
 <body>
     <div class="container">
         <h1>🎤 Audio Transcription</h1>
-        
         <div class="telegram-status" id="telegramStatus">
             <span id="telegramStatusText">Connecting to Telegram...</span>
         </div>
-        
         <div class="status" id="status">Ready to record</div>
         <div class="timer" id="timer"></div>
         <button class="record-btn" id="recordBtn">🎤</button>
         <p>Click to start/stop recording. Audio is transcribed in 10-second chunks automatically and sent to your Telegram chat.</p>
-        
         <div class="transcriptions" id="transcriptions"></div>
         <div class="logs" id="logs"></div>
     </div>
-
     <script>
         let tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
-        let mediaRecorder;
-        let audioChunks = [];
+        let audioContext;
+        let audioProcessor;
         let isRecording = false;
         let recordingStartTime;
         let timerInterval;
         let chunkInterval;
         let stream;
-
+        let audioBuffer = [];
         const recordBtn = document.getElementById('recordBtn');
         const status = document.getElementById('status');
         const timer = document.getElementById('timer');
         const transcriptions = document.getElementById('transcriptions');
         const logs = document.getElementById('logs');
-                
+        
         // Update Telegram status
         function updateTelegramStatus(connected) {
             const statusElement = document.getElementById('telegramStatus');
             const statusText = document.getElementById('telegramStatusText');
-            
             if (connected) {
                 statusElement.className = 'telegram-status telegram-connected';
                 statusText.textContent = '✅ Connected to Telegram';
@@ -179,23 +174,35 @@
             updateTelegramStatus(false);
             addLog('error', 'Telegram WebApp not properly initialized');
         }
-
+        
         recordBtn.addEventListener('click', toggleRecording);
-
+        
         async function startRecording() {
             try {
                 addLog('info', 'Requesting microphone access...');
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 addLog('success', 'Microphone access granted');
                 
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                audioChunks = [];
+                // Create audio context and processor
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(stream);
                 
-                mediaRecorder.ondataavailable = (event) => {
-                    audioChunks.push(event.data);
+                // Buffer size should be power of 2 (2048, 4096, etc.)
+                const bufferSize = 4096;
+                audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+                
+                audioBuffer = [];
+                
+                audioProcessor.onaudioprocess = (e) => {
+                    // Get raw audio data (32-bit floating point)
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Add to buffer
+                    audioBuffer.push(new Float32Array(inputData));
                 };
                 
-                mediaRecorder.start(1000); // Collect data every second
+                source.connect(audioProcessor);
+                audioProcessor.connect(audioContext.destination);
+                
                 isRecording = true;
                 recordingStartTime = Date.now();
                 recordBtn.classList.add('recording');
@@ -209,8 +216,8 @@
                 
                 // Send chunks every 10 seconds
                 chunkInterval = setInterval(() => {
-                    if (isRecording && audioChunks.length > 0) {
-                        sendCurrentChunk();
+                    if (isRecording && audioBuffer.length > 0) {
+                        sendWavChunk();
                     }
                 }, 10000);
                 
@@ -220,10 +227,9 @@
                 status.textContent = 'Error: Cannot access microphone';
             }
         }
-
+        
         function stopRecording() {
             if (!isRecording) return;
-            
             addLog('info', 'Stopping recording...');
             isRecording = false;
             recordBtn.classList.remove('recording');
@@ -233,14 +239,21 @@
             clearInterval(chunkInterval);
             timer.textContent = '';
             
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
+            // Disconnect audio processing
+            if (audioProcessor) {
+                audioProcessor.disconnect();
+                audioProcessor = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
             }
             
             // Send final chunk if there's any data
-            if (audioChunks.length > 0) {
+            if (audioBuffer.length > 0) {
                 addLog('info', 'Sending final audio chunk...');
-                sendCurrentChunk();
+                sendWavChunk();
+                audioBuffer = [];
             }
             
             // Stop stream
@@ -248,18 +261,16 @@
                 stream.getTracks().forEach(track => track.stop());
                 stream = null;
             }
-            
             addLog('success', 'Recording stopped');
             status.textContent = 'Ready to record';
         }
-
+        
         function updateTimer() {
             if (!isRecording) return;
-            
             const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
             timer.textContent = `${elapsed}s`;
         }
-
+        
         function toggleRecording() {
             if (isRecording) {
                 stopRecording();
@@ -268,14 +279,83 @@
             }
         }
         
-        function sendCurrentChunk() {
-            if (audioChunks.length === 0) return;
+        function floatTo16BitPCM(buffer) {
+            const dataview = new DataView(new ArrayBuffer(buffer.length * 2));
+            let index = 0;
+            for (let i = 0; i < buffer.length; i++) {
+                const s = Math.max(-1, Math.min(1, buffer[i]));
+                const val = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                dataview.setInt16(index, val, true);
+                index += 2;
+            }
+            return dataview;
+        }
+        
+        function writeString(dataview, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                dataview.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+        
+        function encodeWAV(samples, sampleRate) {
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const dataview = new DataView(buffer);
             
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-            const chunkSize = audioBlob.size;
+            // RIFF identifier
+            writeString(dataview, 0, 'RIFF');
+            // file length
+            dataview.setUint32(4, 36 + samples.length * 2, true);
+            // RIFF type
+            writeString(dataview, 8, 'WAVE');
+            // format chunk identifier
+            writeString(dataview, 12, 'fmt ');
+            // format chunk length
+            dataview.setUint32(16, 16, true);
+            // sample format (1 is PCM)
+            dataview.setUint16(20, 1, true);
+            // channel count
+            dataview.setUint16(22, 1, true);
+            // sample rate
+            dataview.setUint32(24, sampleRate, true);
+            // byte rate (sample rate * block align)
+            dataview.setUint32(28, sampleRate * 4, true);
+            // block align (channel count * bytes per sample)
+            dataview.setUint16(32, 4, true);
+            // bits per sample
+            dataview.setUint16(34, 16, true);
+            // data chunk identifier
+            writeString(dataview, 36, 'data');
+            // data chunk length
+            dataview.setUint32(40, samples.length * 2, true);
+            
+            // Write PCM samples
+            const pcmData = floatTo16BitPCM(samples);
+            for (let i = 0; i < pcmData.byteLength; i++) {
+                dataview.setUint8(44 + i, pcmData.getUint8(i));
+            }
+            
+            return new Blob([dataview], { type: 'audio/wav' });
+        }
+        
+        function sendWavChunk() {
+            if (audioBuffer.length === 0) return;
+            
+            // Flatten the buffer
+            const flatBuffer = new Float32Array(audioBuffer.reduce((acc, val) => acc + val.length, 0));
+            let offset = 0;
+            for (const buffer of audioBuffer) {
+                flatBuffer.set(buffer, offset);
+                offset += buffer.length;
+            }
+            
+            // Reset audio buffer
+            audioBuffer = [];
+            
+            // Create proper WAV with header
+            const wavBlob = encodeWAV(flatBuffer, audioContext.sampleRate);
+            const chunkSize = wavBlob.size;
+            
             addLog('info', `Preparing audio chunk (${chunkSize} bytes)`);
-            
-            audioChunks = []; // Clear chunks after sending
             
             // Convert to base64
             const reader = new FileReader();
@@ -339,25 +419,21 @@
                     console.error('Error sending audio:', error);
                 }
             };
-            reader.readAsDataURL(audioBlob);
+            reader.readAsDataURL(wavBlob);
         }
         
         function addTranscription(text) {
             const item = document.createElement('div');
             item.className = 'transcription-item';
-            
             const time = document.createElement('div');
             time.className = 'transcription-time';
             time.textContent = new Date().toLocaleTimeString();
-            
             const transcriptionText = document.createElement('div');
             transcriptionText.className = 'transcription-text';
             transcriptionText.textContent = text;
-            
             item.appendChild(time);
             item.appendChild(transcriptionText);
             transcriptions.appendChild(item);
-            
             // Scroll to bottom
             transcriptions.scrollTop = transcriptions.scrollHeight;
         }
@@ -365,24 +441,19 @@
         function addLog(level, message) {
             const entry = document.createElement('div');
             entry.className = `log-entry log-${level}`;
-            
             const time = document.createElement('span');
             time.className = 'log-time';
             time.textContent = `[${new Date().toLocaleTimeString()}] `;
-            
             const text = document.createElement('span');
             text.textContent = message;
-            
             entry.appendChild(time);
             entry.appendChild(text);
             logs.appendChild(entry);
-            
             // Scroll to bottom
             logs.scrollTop = logs.scrollHeight;
-            
             // Also log to console
             console.log(`[${level.toUpperCase()}] ${message}`);
         }
     </script>
 </body>
-</html> 
+</html>

@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import os
 import base64
-import tempfile
 import logging
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 import requests
@@ -193,7 +192,7 @@ def transcribe_audio(audio_path: str) -> str:
         transcription = " ".join(segment.text for segment in segments).strip()
         return transcription
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
+        logger.error(f"Transcription error: {e}", exc_info=True)
         return ""
 
 def send_to_telegram(chat_id: str, text: str) -> bool:
@@ -225,15 +224,13 @@ def transcribe():
             return jsonify({'error': 'No audio data provided'}), 400
 
         audio_bytes = base64.b64decode(audio_data.split(',')[1])
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            temp_file.write(audio_bytes)
-            temp_file_path = temp_file.name
-
-        transcription = transcribe_audio(temp_file_path)
-        os.unlink(temp_file_path)
+        chunk_file_path = f"/tmp/{user_id}-{int(datetime.datetime.now().timestamp())}.wav"
+        with open(chunk_file_path, 'wb') as chunk_file:
+            chunk_file.write(audio_bytes)        
+        transcription = transcribe_audio(chunk_file_path)
 
         if not transcription.strip():
-            return jsonify({'error': 'Transcription failed or empty'}), 500
+            return jsonify({'status': 'success', 'transcription': ''})
 
         if chat_id:
             chat_id_str = str(chat_id)
