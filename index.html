@@ -182,6 +182,7 @@
                 addLog('info', 'Requesting microphone access...');
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 addLog('success', 'Microphone access granted');
+                window.is_finished = false;
                 
                 // Create audio context and processor
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -238,6 +239,10 @@
             clearInterval(timerInterval);
             clearInterval(chunkInterval);
             timer.textContent = '';
+
+            addLog('info', 'Sending final audio chunk...');
+            window.is_finished = true;
+            sendWavChunk();
             
             // Disconnect audio processing
             if (audioProcessor) {
@@ -247,14 +252,8 @@
             if (audioContext) {
                 audioContext.close();
                 audioContext = null;
-            }
-            
-            // Send final chunk if there's any data
-            if (audioBuffer.length > 0) {
-                addLog('info', 'Sending final audio chunk...');
-                sendWavChunk();
-                audioBuffer = [];
-            }
+            }            
+            audioBuffer = [];
             
             // Stop stream
             if (stream) {
@@ -389,9 +388,11 @@
                         body: JSON.stringify({
                             audio_data: audioData,
                             user_id: userId,
-                            chat_id: chatId
+                            chat_id: chatId,
+                            is_finished: window.is_finished
                         })
                     });
+                    addLog('info', `Is finished: ${window.is_finished}`);
                     
                     if (response.ok) {
                         const result = await response.json();                        

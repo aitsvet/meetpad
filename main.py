@@ -32,6 +32,9 @@ with open('agenda.txt', 'r', encoding='utf-8') as file:
 with open('summary.txt', 'r', encoding='utf-8') as file:
     SUMMARY_PROMPT_TEMPLATE = file.read()
 
+with open('minutes.txt', 'r', encoding='utf-8') as file:
+    MINUTES_PROMPT_TEMPLATE = file.read()
+
 # In-memory storage for user context
 user_context = {}
 
@@ -105,37 +108,38 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
 
     try:
         # First: extract agenda info only once per chat
-        if chat_id not in user_context:
-            agenda_result = process_with_gpt(
-                system_prompt=AGENDA_SYSTEM_PROMPT,
-                user_text=raw_text
-            )
-            logger.info(f"Parsed agenda result: {agenda_result}")
-            questions_str = ""
-            for (i, q) in enumerate(agenda_result["questions"]):
-                questions_str += f"{i+1}. {q}\n"
-            user_context[chat_id] = {
-                "duration_minutes": agenda_result["duration_minutes"],
-                "transcriptions": [],
-                "summarized": [],
-                "last_summary": 0,
-                "in_summary": [],
-                "summary_system_prompt": SUMMARY_PROMPT_TEMPLATE.format(
-                    questions=questions_str,
-                    duration_minutes=agenda_result["duration_minutes"]
-                ),
-            }
+        agenda_result = process_with_gpt(
+            system_prompt=AGENDA_SYSTEM_PROMPT,
+            user_text=raw_text
+        )
+        logger.info(f"Parsed agenda result: {agenda_result}")
+        questions_str = ""
+        for (i, q) in enumerate(agenda_result["questions"]):
+            questions_str += f"{i+1}. {q}\n"
+        user_context[chat_id] = {
+            "duration_minutes": agenda_result["duration_minutes"],
+            "transcriptions": [],
+            "summarized": [],
+            "last_summary": 0,
+            "in_summary": [],
+            "questions": questions_str,
+            "summary_system_prompt": SUMMARY_PROMPT_TEMPLATE.format(
+                questions=questions_str,
+                duration_minutes=agenda_result["duration_minutes"]
+            ),
+        }
 
-        await update.message.reply_text(f"""
+        sent = await update.message.reply_text(f"""
 Понял! У нас будет {agenda_result["duration_minutes"]} минут для обсуждения {len(agenda_result["questions"])} вопросов.
-Теперь открой мини-апп и нажми на 🎤, чтобы я следил за регламентом:""",
+Теперь открой mini-app и нажми на 🎤, чтобы я следил за регламентом встречи.""",
                     parse_mode= "Markdown",
                     reply_markup= {
                         "inline_keyboard": [[{
-                            "text": "🎤 Запись",
+                            "text": "Открыть mini-app и начать запись 🔴",
                             "web_app": {"url": WEBAPP_URL}
                         }]]
                     })
+        user_context[chat_id]["remove_button"] = sent.message_id
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
         await update.message.reply_text("❌ Sorry, an error occurred during processing.")
@@ -194,29 +198,19 @@ def transcribe_audio(audio_path: str) -> str:
         logger.error(f"Transcription error: {e}", exc_info=True)
         return ""
 
-def send_to_telegram(chat_id: str, text: str) -> bool:
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(f"Error sending to Telegram: {e}", exc_info=True)
-        return False
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/transcribe', methods=['POST'])
-def transcribe():
+async def transcribe():
     try:
         data = request.get_json()
         audio_data = data.get('audio_data')
         user_id = data.get('user_id', 'unknown')
         chat_id = str(data.get('chat_id', ''))
-        logger.info(f"Transcription request from user {user_id}")
+        is_finished = data.get('is_finished', False)
+        logger.info(f"Transcription request from user {user_id}, meeting {'is' if is_finished else 'not'} finished")
 
         if not audio_data:
             return jsonify({'error': 'No audio data provided'}), 400
@@ -225,60 +219,107 @@ def transcribe():
         chunk_file_path = f"/tmp/{user_id}-{int(datetime.datetime.now().timestamp())}.wav"
         with open(chunk_file_path, 'wb') as chunk_file:
             chunk_file.write(audio_bytes)        
-        transcription = transcribe_audio(chunk_file_path)
-
-        if not transcription.strip():
-            return jsonify({'transcription': ''})
+        transcription = transcribe_audio(chunk_file_path).strip()
 
         if chat_id:
             ctx = user_context[chat_id]
             if "start_time" not in ctx:
                 ctx["start_time"] = int(datetime.datetime.now().timestamp())
+                if "remove_button" in ctx:
+                    await application.bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=ctx["remove_button"],
+                        reply_markup=None  # Removes the inline keyboard
+                    )
+                    del ctx["remove_button"]
+
+            if not transcription.strip():
+                return jsonify({'transcription': ''})
             ctx["transcriptions"].append(transcription)
 
             elapsed_time = int(datetime.datetime.now().timestamp()) - ctx["start_time"]
-            logger.info(f"in_summary {len(ctx["in_summary"])}, elapsed_time {elapsed_time} - last_summary {ctx["last_summary"]} {'>' if elapsed_time - ctx["last_summary"] > 60 else '<='} 60")
+            logger.info(f"in_summary {len(ctx["in_summary"])}, is_finished {is_finished}, " 
+                        f"elapsed_time {elapsed_time} - last_summary {ctx["last_summary"]} "
+                        f"{'>' if elapsed_time - ctx["last_summary"] > 60 else '<='} 60")
 
-            if len(ctx["in_summary"]) == 0 and elapsed_time - ctx["last_summary"] > 50:
+            if is_finished or (len(ctx["in_summary"]) == 0 and elapsed_time - ctx["last_summary"] > 50):
                 ctx["in_summary"] = ctx["transcriptions"]
                 ctx["transcriptions"] = []
                 minutes_left = ctx["duration_minutes"] - elapsed_time // 60
                 transcriptions_str = "\n".join(ctx["in_summary"])
                 summary_prompt = f"""
-    /no_think
+/no_think
 
-    Минут до окончания:
-    {minutes_left}
+Минут до окончания:
+{minutes_left}
 
-    Текущий отрывок:
-    {transcriptions_str}
-    """
+Текущий отрывок:
+{transcriptions_str}
+"""
 
                 try:
-                    summary = process_with_gpt(
-                        system_prompt=ctx["summary_system_prompt"],
-                        user_text=summary_prompt
-                    )
-                    lines = []
-                    if "questions" in summary:
-                        lines.append("*📌 Обсуждалось:*")
-                        for q in summary["questions"]:
-                            number = q["number"]
-                            status = "✅ Завершён" if q["is_resolved"] else "⏳ В процессе"
-                            lines.append(f"  • *{number}*: {status}")
-                            if q.get("key_findings"):
-                                lines.append(f"    → _{q['key_findings']}_")
-                    if "suggestions" in summary:
-                        lines.append("*💡 Подсказки:*")
-                        for i, suggestion in enumerate(summary["suggestions"], 1):
-                            lines.append(f"  • {suggestion}")
-                    send_to_telegram(chat_id, "\n".join(lines).strip())
+                    if not is_finished:
+                        summary = process_with_gpt(
+                            system_prompt=ctx["summary_system_prompt"],
+                            user_text=summary_prompt
+                        )
+                        lines = []
+                        if "questions" in summary and len(summary["questions"]) > 0:
+                            lines.append("*📌 Обсуждалось:*")
+                            for q in summary["questions"]:
+                                number = q["number"]
+                                status = "✅ Завершён" if q["is_resolved"] else "⏳ В процессе"
+                                lines.append(f"  • *{number}*: {status}")
+                                if q.get("key_findings"):
+                                    lines.append(f"    → _{q['key_findings']}_")
+                        if "suggestions" in summary:
+                            lines.append("*💡 Подсказки:*")
+                            for i, suggestion in enumerate(summary["suggestions"], 1):
+                                lines.append(f"  • {suggestion}")
+                    else: # is_finished
+                        summary_prompt = '\n'.join(ctx["summarized"]) + '\n' + '\n'.join(ctx['in_summary'])
+                        summary = process_with_gpt(
+                            system_prompt=MINUTES_PROMPT_TEMPLATE.format(questions=ctx["questions"]),
+                            user_text=summary_prompt
+                        )
+                        lines = []
+                        if "questions" in summary and len(summary["questions"]) > 0:
+                            lines.append("*📌 Обсуждалось:*")
+                            for q in summary["questions"]:
+                                number = q["number"]
+                                status = "✅ Завершён" if q["is_resolved"] else "⏳ Не завершён"
+                                lines.append(f"  • *{number}*: {status}")
+                                if q.get("key_findings"):
+                                    lines.append(f"    → _{q['key_findings']}_")
+                        if "suggestions" in summary:
+                            lines.append("*💡 Рекомендации:*")
+                            for i, suggestion in enumerate(summary["suggestions"], 1):
+                                lines.append(f"  • {suggestion}")
+
+                    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                    payload = {
+                        "chat_id": chat_id,
+                        "text": "\n".join(lines).strip(),
+                        "parse_mode": "Markdown"
+                    }
+                    response = requests.post(url, json=payload, timeout=10)
+                    response.raise_for_status()
 
                     ctx["summarized"].append(ctx["in_summary"])                    
                     ctx["last_summary"] = elapsed_time
                     ctx["in_summary"] = []
+
+                    if is_finished:
+                        user_context[chat_id] = {
+                            "transcriptions": [],
+                            "summarized": [],
+                            "last_summary": 0,
+                            "in_summary": [],
+                        }
+
+                    # ctx["remove_button"] = json.loads(response.text)["result"]["message_id"]
                 except Exception as e:
-                    logger.error(f"Error in chained GPT processing: {e}", exc_info=True)
+                    logger.error(f"Error in summary processing: {e}", exc_info=True)
 
         return jsonify({'transcription': transcription})
     except Exception as e:
