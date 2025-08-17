@@ -123,6 +123,7 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
         questions_str = ""
         for (i, q) in enumerate(agenda_result["questions"]):
             questions_str += f"{i+1}. {q}\n"
+        ending_minutes = agenda_result["duration_minutes"]/10 if agenda_result["duration_minutes"] > 20 else 2
         user_context[chat_id] = {
             "duration_minutes": agenda_result["duration_minutes"],
             "transcriptions": [],
@@ -133,7 +134,7 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
             "summary_system_prompt": SUMMARY_PROMPT_TEMPLATE.format(
                 questions=questions_str,
                 duration_minutes=agenda_result["duration_minutes"],
-                duration_minutes_by_ten=agenda_result["duration_minutes"]/10,
+                ending_minutes=ending_minutes,
             ),
         }
 
@@ -157,6 +158,9 @@ json_block = lambda s: s[s.find('{'):s.rfind('}')+1] if s.find('{') != -1 and s.
 def process_with_gpt(system_prompt: str, user_text: str):
     """Send request to OpenAI-compatible API."""
     try:
+        logger.info("system_prompt\n" + system_prompt)
+        logger.info("user_text\n" + user_text)
+
         url = f"{OPENAI_BASE_URL}/chat/completions"
         payload = {
             "model": OPENAI_MODEL,
