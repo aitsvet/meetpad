@@ -46,7 +46,6 @@
             100% { transform: scale(1); }
         }
         .status {
-            display: none;
             text-align: center;
             margin: 20px 0;
             font-weight: bold;
@@ -58,11 +57,14 @@
         }
         .transcriptions {
             margin-top: 20px;
-            max-height: 550px;
+            height: 500px;
+            max-height: 500px;
             overflow-y: auto;
             border: 1px solid #ccc;
             padding: 10px;
             border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
         }
         .transcription-item {
             margin-bottom: 10px;
@@ -78,7 +80,7 @@
         }
         .transcription-text {
             font-size: 14px;
-            color: #0066cc;
+            color: #ccc;
         }
         .logs {
             display: none;
@@ -136,7 +138,7 @@
         <div class="telegram-status" id="telegramStatus">
             <span id="telegramStatusText">Connecting to Telegram...</span>
         </div>
-        <div class="status" id="status">Ready to record</div>
+        <div class="status" id="status">Push to start record</div>
         <div class="timer" id="timer"></div>
         <button class="record-btn" id="recordBtn">🎤</button>
         <div class="transcriptions" id="transcriptions"></div>
@@ -215,7 +217,7 @@
                 recordingStartTime = Date.now();
                 recordBtn.classList.add('recording');
                 recordBtn.textContent = '⏹️';
-                status.textContent = 'Recording... Click to stop';
+                status.innerHTML = 'Recording... Hide (but not close) app to see chat';
                 
                 addLog('info', 'Recording started');
                 
@@ -268,7 +270,7 @@
                 stream = null;
             }
             addLog('success', 'Recording stopped');
-            status.textContent = 'Ready to record';
+            status.textContent = 'Push to start record';
         }
         
         function updateTimer() {
@@ -420,17 +422,10 @@
         }
         
         function addTranscription(text) {
-            const item = document.createElement('div');
-            item.className = 'transcription-item';
-            const time = document.createElement('div');
-            time.className = 'transcription-time';
-            time.textContent = new Date().toLocaleTimeString();
             const transcriptionText = document.createElement('div');
-            transcriptionText.className = 'transcription-text';
+            transcriptionText.className = 'transcription-text monospace';
             transcriptionText.textContent = text;
-            item.appendChild(time);
-            item.appendChild(transcriptionText);
-            transcriptions.appendChild(item);
+            transcriptions.appendChild(transcriptionText);
             // Scroll to bottom
             transcriptions.scrollTop = transcriptions.scrollHeight;
         }

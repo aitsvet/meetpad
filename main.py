@@ -245,16 +245,18 @@ async def transcribe():
             if "start_time" not in ctx:
                 ctx["start_time"] = int(datetime.datetime.now().timestamp())
                 if "remove_button" in ctx:
-                    await application.bot.edit_message_reply_markup(
-                        chat_id=chat_id,
-                        message_id=ctx["remove_button"],
-                        reply_markup=None  # Removes the inline keyboard
-                    )
-                    del ctx["remove_button"]
+                    try:
+                        await application.bot.edit_message_reply_markup(
+                            chat_id=chat_id,
+                            message_id=ctx["remove_button"],
+                            reply_markup=None  # Removes the inline keyboard
+                        )
+                        del ctx["remove_button"]
+                    except Exception as e:
+                        logger.error(f"Could not retract button: {e}")
 
-            if not transcription.strip():
-                return jsonify({'transcription': ''})
-            ctx["transcriptions"].append(transcription)
+            if transcription.strip():
+                ctx["transcriptions"].append(transcription)
 
             elapsed_time = int(datetime.datetime.now().timestamp()) - ctx["start_time"]
             logger.info(f"in_summary {len(ctx["in_summary"])}, is_finished {is_finished}, " 
@@ -288,7 +290,7 @@ async def transcribe():
                             for q in summary["questions"]:
                                 number = q["number"]
                                 status = "✅ Завершён" if q["is_resolved"] else "⏳ В процессе"
-                                lines.append(f"  • *{number}*: {status}")
+                                lines.append(f"Вопрос *{number}*: {status}")
                                 if q.get("key_findings"):
                                     lines.append(f"    → _{q['key_findings']}_")
                         if "suggestions" in summary:
