@@ -100,6 +100,8 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
     if not raw_text or not raw_text.strip():
         await update.message.reply_text("Please provide valid text or a supported file.")
         return
+    
+    logger.info(f"From user {chat_id} got raw text: {raw_text}")
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
@@ -307,7 +309,7 @@ async def transcribe():
                     response = requests.post(url, json=payload, timeout=10)
                     response.raise_for_status()
 
-                    ctx["summarized"].append(ctx["in_summary"])                    
+                    ctx["summarized"].extend(ctx["in_summary"])                    
                     ctx["last_summary"] = elapsed_time
                     ctx["in_summary"] = []
 
