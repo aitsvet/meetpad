@@ -113,6 +113,11 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
             user_text=raw_text
         )
         logger.info(f"Parsed agenda result: {agenda_result}")
+
+        if "questions" not in agenda_result or len(agenda_result["questions"]) == 0 or "duration_minutes" not in agenda_result or agenda_result["duration_minutes"] < 1:
+            await update.message.reply_text(f"Не понял, уточните, пожалуйста, длительность встречи в минутах и список вопросов к ней.")
+            return
+
         questions_str = ""
         for (i, q) in enumerate(agenda_result["questions"]):
             questions_str += f"{i+1}. {q}\n"
@@ -125,7 +130,8 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
             "questions": questions_str,
             "summary_system_prompt": SUMMARY_PROMPT_TEMPLATE.format(
                 questions=questions_str,
-                duration_minutes=agenda_result["duration_minutes"]
+                duration_minutes=agenda_result["duration_minutes"],
+                duration_minutes_by_ten=agenda_result["duration_minutes"]/10,
             ),
         }
 
@@ -242,7 +248,7 @@ async def transcribe():
                         f"elapsed_time {elapsed_time} - last_summary {ctx["last_summary"]} "
                         f"{'>' if elapsed_time - ctx["last_summary"] > 60 else '<='} 60")
 
-            if is_finished or (len(ctx["in_summary"]) == 0 and elapsed_time - ctx["last_summary"] > 50):
+            if is_finished or (len(ctx["in_summary"]) == 0 and elapsed_time - ctx["last_summary"] > 60):
                 ctx["in_summary"] = ctx["transcriptions"]
                 ctx["transcriptions"] = []
                 minutes_left = ctx["duration_minutes"] - elapsed_time // 60
@@ -283,18 +289,14 @@ async def transcribe():
                             user_text=summary_prompt
                         )
                         lines = []
-                        if "questions" in summary and len(summary["questions"]) > 0:
-                            lines.append("*📌 Обсуждалось:*")
-                            for q in summary["questions"]:
-                                number = q["number"]
-                                status = "✅ Завершён" if q["is_resolved"] else "⏳ Не завершён"
-                                lines.append(f"  • *{number}*: {status}")
-                                if q.get("key_findings"):
-                                    lines.append(f"    → _{q['key_findings']}_")
-                        if "suggestions" in summary:
-                            lines.append("*💡 Рекомендации:*")
-                            for i, suggestion in enumerate(summary["suggestions"], 1):
-                                lines.append(f"  • {suggestion}")
+                        if "key_points" in summary:
+                            lines.append("*📌 Решения:*")
+                            for i, point in enumerate(summary["key_points"], 1):
+                                lines.append(f"  • {point}")
+                        if "action_points" in summary and len(summary["action_points"]) > 0:
+                            lines.append("*🛠️ Задачи:*")
+                            for i, point in enumerate(summary["action_points"], 1):
+                                lines.append(f"  • {point}")
 
                     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                     payload = {
