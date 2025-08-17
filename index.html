@@ -393,25 +393,14 @@
                         })
                     });
                     
-                    addLog('info', `Response status: ${response.status} ${response.statusText}`);
-                    
                     if (response.ok) {
-                        const result = await response.json();
-                        addLog('success', 'Audio chunk processed successfully');
-                        
+                        const result = await response.json();                        
                         if (result.transcription) {
                             addTranscription(result.transcription);
-                            addLog('info', `Transcription: "${result.transcription}"`);
-                            
-                            if (result.sent_to_telegram) {
-                                addLog('success', 'Transcription sent to your Telegram chat');
-                            } else {
-                                addLog('warning', 'Transcription not sent to Telegram (bot token not configured)');
-                            }
                         }
                     } else {
                         const errorText = await response.text();
-                        addLog('error', `Server error: ${response.status} - ${errorText}`);
+                        addLog('error', `Server error: ${errorText}`);
                         console.error('Failed to send audio chunk');
                     }
                 } catch (error) {

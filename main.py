@@ -9,6 +9,7 @@ import json
 import torch
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatAction
 import sys
 import datetime
 import re
@@ -28,8 +29,8 @@ CORS(app)
 with open('agenda.txt', 'r', encoding='utf-8') as file:
     AGENDA_SYSTEM_PROMPT = file.read()
 
-with open('chunk.txt', 'r', encoding='utf-8') as file:
-    CHUNK_PROMPT_TEMPLATE = file.read()
+with open('summary.txt', 'r', encoding='utf-8') as file:
+    SUMMARY_PROMPT_TEMPLATE = file.read()
 
 # In-memory storage for user context
 user_context = {}
@@ -58,20 +59,9 @@ else:
     logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will not run.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = "🎤 <b>Welcome to Audio Transcription Bot!</b>\n"
-    welcome_text += "Click below to open the app:\n"
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode='HTML',
-        reply_markup={
-            "inline_keyboard": [[
-                {
-                    "text": "🎤 Open Transcription App",
-                    "web_app": {"url": WEBAPP_URL}
-                }
-            ]]
-        }
-    )
+    await update.message.reply_text("""🎤 **Привет!**
+MeetPad — твой помощник по проведению встреч.
+Пришли мне длительность встречи и список вопросов.""", parse_mode='Markdown')
 
 async def handle_message_or_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
@@ -108,41 +98,51 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text("Please provide valid text or a supported file.")
         return
 
-    await update.message.reply_text("🔄 Processing your input...")
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING
+    )
 
     try:
         # First: extract agenda info only once per chat
         if chat_id not in user_context:
             agenda_result = process_with_gpt(
                 system_prompt=AGENDA_SYSTEM_PROMPT,
-                user_text=raw_text,
-                use_json=True
+                user_text=raw_text
             )
-            parsed_agenda_result = json.loads(agenda_result)
-            logger.info(f"Parsed agenda result: {parsed_agenda_result}")
+            logger.info(f"Parsed agenda result: {agenda_result}")
             questions_str = ""
-            for (i, q) in enumerate(parsed_agenda_result["questions"]):
+            for (i, q) in enumerate(agenda_result["questions"]):
                 questions_str += f"{i+1}. {q}\n"
             user_context[chat_id] = {
-                "duration_minutes": parsed_agenda_result["duration_minutes"],
-                "start_time": datetime.datetime.now().timestamp(), 
-                "chunk_system_prompt": CHUNK_PROMPT_TEMPLATE.format(
+                "duration_minutes": agenda_result["duration_minutes"],
+                "transcriptions": [],
+                "summarized": [],
+                "last_summary": 0,
+                "in_summary": [],
+                "summary_system_prompt": SUMMARY_PROMPT_TEMPLATE.format(
                     questions=questions_str,
-                    duration_minutes=parsed_agenda_result["duration_minutes"]
+                    duration_minutes=agenda_result["duration_minutes"]
                 ),
             }
 
-        await update.message.reply_text(
-            f"```\n{json.dumps(user_context[chat_id], indent=2, ensure_ascii=False)}\n```",
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text(f"""
+Понял! У нас будет {agenda_result["duration_minutes"]} минут для обсуждения {len(agenda_result["questions"])} вопросов.
+Теперь открой мини-апп и нажми на 🎤, чтобы я следил за регламентом:""",
+                    parse_mode= "Markdown",
+                    reply_markup= {
+                        "inline_keyboard": [[{
+                            "text": "🎤 Запись",
+                            "web_app": {"url": WEBAPP_URL}
+                        }]]
+                    })
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
         await update.message.reply_text("❌ Sorry, an error occurred during processing.")
 
 json_block = lambda s: s[s.find('{'):s.rfind('}')+1] if s.find('{') != -1 and s.rfind('}') != -1 and s.find('{') < s.rfind('}') + 1 else ""
 
-def process_with_gpt(system_prompt: str, user_text: str, use_json: bool = False) -> str:
+def process_with_gpt(system_prompt: str, user_text: str):
     """Send request to OpenAI-compatible API."""
     try:
         url = f"{OPENAI_BASE_URL}/chat/completions"
@@ -153,11 +153,9 @@ def process_with_gpt(system_prompt: str, user_text: str, use_json: bool = False)
                 {"role": "user", "content": user_text}
             ],
             "max_tokens": 1000,
-            "temperature": 0.5
+            "temperature": 0.5,
+            "response_format": {"type": "json_object"}
         }
-        if use_json:
-            payload["response_format"] = {"type": "json_object"}
-
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
@@ -165,12 +163,12 @@ def process_with_gpt(system_prompt: str, user_text: str, use_json: bool = False)
             "X-Title": "Text Processing Bot"
         }
 
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, timeout=300)
         logger.info(response.text)
         response.raise_for_status()
         result = response.json()
         result = result['choices'][0]['message']['content'].strip()
-        return json_block(result)
+        return json.loads(json_block(result))
 
     except Exception as e:
         logger.error(f"Error in process_with_gpt: {e}", exc_info=True)
@@ -190,6 +188,7 @@ def transcribe_audio(audio_path: str) -> str:
         )
         logger.info(f"Transcription language: {info.language} (prob: {info.language_probability:.2f})")
         transcription = " ".join(segment.text for segment in segments).strip()
+        logger.info(f"Transcription result: {transcription}")
         return transcription
     except Exception as e:
         logger.error(f"Transcription error: {e}", exc_info=True)
@@ -201,7 +200,6 @@ def send_to_telegram(chat_id: str, text: str) -> bool:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
-        logger.error(f"{response.text}")
         return True
     except Exception as e:
         logger.error(f"Error sending to Telegram: {e}", exc_info=True)
@@ -217,7 +215,7 @@ def transcribe():
         data = request.get_json()
         audio_data = data.get('audio_data')
         user_id = data.get('user_id', 'unknown')
-        chat_id = data.get('chat_id', None)
+        chat_id = str(data.get('chat_id', ''))
         logger.info(f"Transcription request from user {user_id}")
 
         if not audio_data:
@@ -230,75 +228,62 @@ def transcribe():
         transcription = transcribe_audio(chunk_file_path)
 
         if not transcription.strip():
-            return jsonify({'status': 'success', 'transcription': ''})
+            return jsonify({'transcription': ''})
 
         if chat_id:
-            chat_id_str = str(chat_id)
-            try:
-                ctx = user_context[chat_id_str]
-                minutes_left = ctx["duration_minutes"] - (datetime.datetime.now().timestamp() - ctx['start_time']) / 60
+            ctx = user_context[chat_id]
+            if "start_time" not in ctx:
+                ctx["start_time"] = int(datetime.datetime.now().timestamp())
+            ctx["transcriptions"].append(transcription)
 
-                filled_chunk_prompt = f"""
-/no_think
+            elapsed_time = int(datetime.datetime.now().timestamp()) - ctx["start_time"]
+            logger.info(f"in_summary {len(ctx["in_summary"])}, elapsed_time {elapsed_time} - last_summary {ctx["last_summary"]} {'>' if elapsed_time - ctx["last_summary"] > 60 else '<='} 60")
 
-Минут до окончания:
-{minutes_left}
+            if len(ctx["in_summary"]) == 0 and elapsed_time - ctx["last_summary"] > 50:
+                ctx["in_summary"] = ctx["transcriptions"]
+                ctx["transcriptions"] = []
+                minutes_left = ctx["duration_minutes"] - elapsed_time // 60
+                transcriptions_str = "\n".join(ctx["in_summary"])
+                summary_prompt = f"""
+    /no_think
 
-Текущий отрывок:
-{transcription}
-"""
-                final_response = process_with_gpt(
-                    system_prompt=ctx["chunk_system_prompt"],
-                    user_text=filled_chunk_prompt,
-                    use_json=False
-                )
+    Минут до окончания:
+    {minutes_left}
 
-                success = send_to_telegram(chat_id, f"```\n{json.dumps(final_response, indent=2, ensure_ascii=False)}\n```")
-            except Exception as e:
-                logger.error(f"Error in chained GPT processing: {e}", exc_info=True)
-                final_response = transcription
-                success = False
-        else:
-            final_response = transcription
-            success = False
+    Текущий отрывок:
+    {transcriptions_str}
+    """
 
-        return jsonify({
-            'status': 'success',
-            'transcription': transcription,
-            'enhanced_summary': final_response,
-            'sent_to_telegram': success,
-            'message': 'Processed successfully' + (' and sent to Telegram' if success else '')
-        })
+                try:
+                    summary = process_with_gpt(
+                        system_prompt=ctx["summary_system_prompt"],
+                        user_text=summary_prompt
+                    )
+                    lines = []
+                    if "questions" in summary:
+                        lines.append("*📌 Обсуждалось:*")
+                        for q in summary["questions"]:
+                            number = q["number"]
+                            status = "✅ Завершён" if q["is_resolved"] else "⏳ В процессе"
+                            lines.append(f"  • *{number}*: {status}")
+                            if q.get("key_findings"):
+                                lines.append(f"    → _{q['key_findings']}_")
+                    if "suggestions" in summary:
+                        lines.append("*💡 Подсказки:*")
+                        for i, suggestion in enumerate(summary["suggestions"], 1):
+                            lines.append(f"  • {suggestion}")
+                    send_to_telegram(chat_id, "\n".join(lines).strip())
+
+                    ctx["summarized"].append(ctx["in_summary"])                    
+                    ctx["last_summary"] = elapsed_time
+                    ctx["in_summary"] = []
+                except Exception as e:
+                    logger.error(f"Error in chained GPT processing: {e}", exc_info=True)
+
+        return jsonify({'transcription': transcription})
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
-
-@app.route('/webhook', methods=['POST'])
-def telegram_webhook():
-    try:
-        data = request.get_json()
-        logger.info(f"Webhook received: {json.dumps(data, indent=2)}")
-        if 'message' in data:
-            chat_id = data['message']['chat']['id']
-            text = data['message'].get('text', '')
-            if text.startswith('/start'):
-                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                payload = {
-                    "chat_id": chat_id,
-                    "text": "🎤 <b>Welcome!</b>\nOpen the app below:",
-                    "parse_mode": "HTML",
-                    "reply_markup": {
-                        "inline_keyboard": [[{
-                            "text": "🎤 Open App",
-                            "web_app": {"url": WEBAPP_URL}
-                        }]]
-                    }
-                }
-                requests.post(url, json=payload)
-        return jsonify({'status': 'ok'})
-    except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def run_flask():
     app.run(host='0.0.0.0', port=7860, debug=False, use_reloader=False)
