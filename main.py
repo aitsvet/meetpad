@@ -62,9 +62,12 @@ else:
     logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will not run.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("""🎤 **Привет!**
+    try:
+        await update.message.reply_text("""🎤 **Привет!**
 MeetPad — твой помощник по проведению встреч.
 Пришли мне длительность встречи и список вопросов.""", parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error sending typing action: {e}")
 
 async def handle_message_or_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.message.chat_id)
@@ -101,12 +104,16 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text("Please provide valid text or a supported file.")
         return
     
-    logger.info(f"From user {chat_id} got raw text: {raw_text}")
+    logger.info(f"From user {chat_id} got raw text\n{raw_text}")
 
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action=ChatAction.TYPING
-    )
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.TYPING
+        )
+        await update.message.reply_text("⏳ Обрабатываю вашу агенду 👀")
+    except Exception as e:
+        logger.error(f"Error sending typing action: {e}")
 
     try:
         # First: extract agenda info only once per chat
@@ -123,7 +130,7 @@ async def handle_message_or_document(update: Update, context: ContextTypes.DEFAU
         questions_str = ""
         for (i, q) in enumerate(agenda_result["questions"]):
             questions_str += f"{i+1}. {q}\n"
-        ending_minutes = agenda_result["duration_minutes"]/10 if agenda_result["duration_minutes"] > 20 else 2
+        ending_minutes = agenda_result["duration_minutes"]/10 if agenda_result["duration_minutes"] > 30 else 2
         user_context[chat_id] = {
             "duration_minutes": agenda_result["duration_minutes"],
             "transcriptions": [],
